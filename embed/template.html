@@ -145,6 +145,31 @@ const BREEDS = [
 ];
 // 품종이 아니라 털 무늬를 가리키는 항목: 품종 순위에서는 빼고 따로 보여준다.
 const COATS = new Set(["orange tabby","tuxedo","calico","tortoiseshell","silver tabby","mackerel tabby"]);
+// 품종별 외모 설명: 이름만으로는 CLIP이 구별하기 어려운 품종을 돕는다.
+const DESC = {
+ "Persian":"long fluffy coat and a flat round face","Himalayan":"long fluffy coat, flat face, blue eyes and dark face points",
+ "Exotic Shorthair":"short plush coat and a flat round face","Korean Shorthair":"a short-haired domestic cat with a sleek short coat",
+ "Maine Coon":"very large size, shaggy long coat, tufted ears and a bushy tail","Norwegian Forest Cat":"long thick double coat, triangular face and bushy tail",
+ "Siberian":"thick long triple coat and a round face","Ragdoll":"semi-long silky coat, blue eyes and pointed color pattern",
+ "Birman":"long silky coat, blue eyes and white gloved paws","Siamese":"short sleek coat, blue almond eyes and dark pointed ears, face and paws",
+ "Russian Blue":"short dense silvery blue-gray coat and green eyes","British Shorthair":"dense plush short coat and a round chubby face",
+ "Scottish Fold":"folded ears and a round face","Bengal":"spotted or marbled golden coat like a leopard",
+ "Abyssinian":"ticked reddish-brown coat and large ears","Sphynx":"hairless wrinkled skin and large ears","Munchkin":"very short legs",
+ "Turkish Angora":"long silky white coat and slender body","Turkish Van":"white body with colored patches on head and tail",
+ "Savannah":"tall slim body with spotted coat and large ears","Egyptian Mau":"spotted silver or bronze coat","Ocicat":"spotted wild-looking short coat",
+ "Manx":"no tail","Japanese Bobtail":"short pom-pom tail","American Shorthair":"short dense coat with tabby pattern",
+ "Cornish Rex":"curly wavy short coat and large ears","Devon Rex":"curly short coat and big ears with a pixie face",
+ "Burmese":"short glossy brown coat and round golden eyes","Bombay":"glossy jet black short coat and copper eyes",
+ "Chartreux":"short dense blue-gray coat and orange eyes","Korat":"silver-blue coat, heart-shaped face and green eyes",
+ "Somali":"long ticked coat and a fox-like bushy tail","Balinese":"long silky coat and pointed color pattern with blue eyes",
+ "Singapura":"small cat with ticked sepia coat","Nebelung":"long silky blue-gray coat","Selkirk Rex":"curly plush coat",
+ "Peterbald":"thin hairless or fuzzy coat and long slender body","Donskoy":"hairless wrinkled skin","Ragamuffin":"large with a fluffy semi-long coat",
+ "Toyger":"tiger-striped coat","Lykoi":"werewolf-like sparse roan coat",
+ "domestic shorthair":"an ordinary short-haired house cat","domestic longhair":"an ordinary long-haired house cat"
+};
+// 털 길이가 분명한 품종만 표시. 나머지(혼합형·무모 등)는 털 길이로 점수를 깎지 않는다.
+const LONG_HAIR = new Set(["Balinese","Birman","British Longhair","Cymric","Himalayan","Javanese","Maine Coon","Nebelung","Norwegian Forest Cat","Persian","Ragamuffin","Ragdoll","Siberian","Turkish Angora","Turkish Van","Somali","domestic longhair"]);
+const SHORT_HAIR = new Set(["Abyssinian","American Shorthair","Bengal","Bombay","British Shorthair","Burmese","Chartreux","Egyptian Mau","Havana Brown","Korat","Korean Shorthair","Russian Blue","Siamese","Singapura","Oriental Shorthair","Ocicat","Savannah","Tonkinese","Toyger","domestic shorthair","Cornish Rex","Devon Rex","European Burmese","Chausie","Serengeti"]);
 const NOT_CAT = [["dog","개"],["person","사람"],["landscape","풍경"],["object","물체"],["bird","새"]];
 
 // 문장 여러 개의 평균으로 품종 설명을 만든다.
@@ -195,24 +220,40 @@ async function embedBlob(blob) {
 // ---------- 라벨 ----------
 // label: {key, en, ko, isCat, text(Float32Array), refs: Float32Array[]}
 let labels = [];
-const mkPrompts = (en, isCat) => TEMPLATES.map(t => t.replace("{}", isCat && !/\bcat$/i.test(en) ? en + " cat" : en));
+const DESC_TEMPLATES = ["a photo of a {} cat, {d}.", "a {} cat with {d}.", "a close-up photo of a {} cat, {d}."];
+const catName = (en, isCat) => (isCat && !/\bcat$/i.test(en) ? en + " cat" : en);
+const mkPrompts = l => {
+  const n = catName(l.en, l.isCat);
+  const out = TEMPLATES.map(t => t.replace("{}", n));
+  if (l.desc) out.push(...DESC_TEMPLATES.map(t => t.replace("{}", l.en.replace(/ cat$/i, "")).replace("{d}", l.desc)));
+  return out;
+};
 async function addTextEmbeds(list) {
-  const flat = list.flatMap(l => mkPrompts(l.en, l.isCat));
-  const emb = await embedTexts(flat);
+  const prompts = list.map(mkPrompts);
+  const emb = await embedTexts(prompts.flat());
   let k = 0;
-  for (const l of list) {
+  for (const [li, l] of list.entries()) {
     const acc = new Float32Array(emb[0].length);
-    for (let i = 0; i < TEMPLATES.length; i++, k++) for (let j = 0; j < acc.length; j++) acc[j] += emb[k][j];
+    for (let i = 0; i < prompts[li].length; i++, k++) for (let j = 0; j < acc.length; j++) acc[j] += emb[k][j];
     l.text = norm(acc);
   }
 }
+let hair = null;   // 털 길이 판별용 문장 임베딩
+async function buildHair() {
+  const mk = ps => { const e = embedTexts(ps); return e; };
+  const L = await mk(["a photo of a long-haired cat with long fluffy fur.", "a fluffy cat with long flowing fur.", "a long-haired cat."]);
+  const S = await mk(["a photo of a short-haired cat with short sleek fur.", "a cat with a short smooth coat.", "a short-haired cat."]);
+  const avg = es => { const a = new Float32Array(es[0].length); es.forEach(e => e.forEach((v, j) => { a[j] += v; })); return norm(a); };
+  hair = { long: avg(L), short: avg(S) };
+}
 async function buildLabels() {
   labels = [
-    ...BREEDS.map(([en, ko]) => ({ key: en, en, ko, isCat: true, coat: COATS.has(en), refs: [] })),
+    ...BREEDS.map(([en, ko]) => ({ key: en, en, ko, isCat: true, coat: COATS.has(en), desc: DESC[en], refs: [] })),
     ...NOT_CAT.map(([en, ko]) => ({ key: en, en, ko, isCat: false, refs: [] }))
   ];
   status("품종 설명을 계산하는 중입니다…");
   await addTextEmbeds(labels);
+  await buildHair();
 }
 function findLabel(folder) {
   const k = key(folder);
@@ -253,7 +294,12 @@ function refSummary() {
 
 // ---------- 분류 ----------
 function classify(emb) {
-  const zs = softmax(labels.map(l => 100 * dot(emb, l.text)));
+  let zs = softmax(labels.map(l => 100 * dot(emb, l.text)));
+  if (hair) {   // 사진의 털 길이와 어긋나는 품종은 점수를 깎는다(완전히 없애지는 않음).
+    const [pl, ps] = softmax([100 * dot(emb, hair.long), 100 * dot(emb, hair.short)]);
+    zs = zs.map((p, i) => p * (LONG_HAIR.has(labels[i].key) ? 0.25 + 0.75 * pl : SHORT_HAIR.has(labels[i].key) ? 0.25 + 0.75 * ps : 1));
+    const t = zs.reduce((x, y) => x + y, 0); zs = zs.map(p => p / t);
+  }
   const refIdx = labels.map((l, i) => l.refs.length ? i : -1).filter(i => i >= 0);
   if (!refIdx.length) return { probs: zs, used: 0 };
   // 기준 사진 점수: 가장 비슷한 최대 3장의 평균 유사도
