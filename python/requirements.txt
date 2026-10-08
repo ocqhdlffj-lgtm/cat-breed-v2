@@ -1,0 +1,8 @@
+torch
+transformers>=4.40,<5
+pillow
+numpy
+scikit-learn
+joblib
+tqdm
+gradio>=4

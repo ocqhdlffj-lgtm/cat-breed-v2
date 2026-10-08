@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>고양이 품종 판별기</title>
+<style>
+  :root{--bg:#f5f3ee;--card:#fff;--fg:#1d1b18;--mute:#6f6a62;--line:#e1ddd4;--accent:#c4501b;--bar:#e9e4d9}
+  @media(prefers-color-scheme:dark){:root{--bg:#161412;--card:#201d1a;--fg:#f1ede6;--mute:#a39d92;--line:#37332e;--accent:#ee8a55;--bar:#2e2a26}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 "Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",system-ui,sans-serif}
+  main{max-width:640px;margin:0 auto;padding:32px 16px 64px}
+  h1{font-size:1.6rem;margin:0 0 4px}
+  .sub{color:var(--mute);margin:0 0 24px}
+  #drop{display:block;border:2px dashed var(--line);border-radius:16px;background:var(--card);min-height:260px;cursor:pointer;overflow:hidden;position:relative}
+  #drop.over,#drop:focus-visible{border-color:var(--accent);outline:none}
+  #drop .hint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--mute);text-align:center;padding:16px}
+  #drop .hint b{color:var(--fg)}
+  #preview{display:none;width:100%;max-height:420px;object-fit:contain;background:#000}
+  #status{margin:16px 0 8px;color:var(--mute);font-size:.9rem;min-height:1.4em;overflow-wrap:anywhere}
+  progress{width:100%;height:6px;accent-color:var(--accent);display:none;margin-bottom:8px}
+  #result{display:none;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;margin-top:8px}
+  #top{font-size:1.5rem;font-weight:700;margin:0}
+  #top small{display:block;font-size:.85rem;font-weight:400;color:var(--mute)}
+  ol{list-style:none;margin:16px 0 0;padding:0;display:grid;gap:10px}
+  li{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:.95rem}
+  li .n{min-width:0;overflow-wrap:anywhere}
+  li .p{font-variant-numeric:tabular-nums;color:var(--mute)}
+  li .b{grid-column:1/-1;height:6px;border-radius:3px;background:var(--bar);overflow:hidden}
+  li .b i{display:block;height:100%;background:var(--accent)}
+  .note{color:var(--mute);font-size:.8rem;margin-top:20px}
+  details{margin-top:24px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 20px}
+  summary{cursor:pointer;font-weight:600}
+  details p,details pre{font-size:.88rem;color:var(--mute);margin:10px 0}
+  details pre{background:var(--bar);padding:10px 12px;border-radius:8px;overflow-x:auto;color:var(--fg)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  button,.btn{font:inherit;font-size:.9rem;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+  button:hover,.btn:hover{border-color:var(--accent)}
+  button:disabled{opacity:.5;cursor:default}
+  #refinfo{font-size:.88rem;margin-top:10px}
+</style>
+</head>
+<body>
+<main>
+  <h1>고양이 품종 판별기</h1>
+  <p class="sub">고양이 사진을 올리면 어떤 품종에 가장 가까운지 알려줍니다. 사진은 서버로 전송되지 않고 내 브라우저에서만 처리됩니다.</p>
+
+  <label id="drop" for="file" tabindex="0">
+    <img id="preview" alt="업로드한 고양이 사진">
+    <div class="hint" id="hint"><b>사진을 끌어다 놓거나 눌러서 선택</b><span>JPG, PNG, WEBP</span></div>
+  </label>
+  <input id="file" type="file" accept="image/*" hidden>
+
+  <div id="status">내장된 모델을 준비하는 중입니다. 파일이 커서 열리는 데 시간이 걸릴 수 있습니다.</div>
+  <progress id="prog" max="100" value="0"></progress>
+
+  <section id="result" aria-live="polite">
+    <p id="top"></p>
+    <ol id="list"></ol>
+    <p class="note">AI가 외모로 추정한 결과이며 정확한 품종 확인은 수의사나 혈통서가 필요합니다. 믹스묘와 길고양이는 가장 비슷한 품종이 표시됩니다.</p>
+  </section>
+
+  <details id="refs">
+    <summary>기준 사진으로 정확도 높이기 (선택)</summary>
+    <p>품종별 폴더에 사진을 넣어 두고 폴더를 선택하면, 내 사진과 가장 비슷한 기준 사진을 찾아 결과에 반영합니다. 품종당 10~30장이면 충분합니다. 폴더 이름이 품종 이름이 됩니다. 영문(Persian)이나 한글(페르시안) 모두 됩니다. 목록에 없는 이름은 새 품종으로 추가됩니다.</p>
+<pre>reference/
+  Persian/   a.jpg b.jpg ...
+  Siamese/   ...
+  코리안 숏헤어/ ...</pre>
+    <div class="row">
+      <label class="btn" for="refdir" id="refbtn" tabindex="0">폴더 선택</label>
+      <input id="refdir" type="file" webkitdirectory multiple hidden>
+      <button id="refclear" type="button">기준 사진 지우기</button>
+    </div>
+    <div id="refinfo">불러온 기준 사진: 없음</div>
+  </details>
+</main>
+
+<!--EMBEDDED_DATA-->
+
+<script type="module">
+// ---------- 내장 파일 풀기 (인터넷 없이 동작) ----------
+const $s = document.getElementById("status");
+function b64ToU8(b64) {
+  const len = b64.length, pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  const out = new Uint8Array(len / 4 * 3 - pad); let o = 0; const CH = 4 * 1024 * 1024;
+  for (let i = 0; i < len; i += CH) { const bin = atob(b64.slice(i, i + CH)); for (let j = 0; j < bin.length; j++) out[o++] = bin.charCodeAt(j); }
+  return out;
+}
+const files = {};
+try {
+  const els = [...document.querySelectorAll("script.emb")];
+  for (let k = 0; k < els.length; k++) {
+    $s.textContent = `내장 파일을 푸는 중입니다… (${k + 1}/${els.length})`;
+    await new Promise(r => setTimeout(r));
+    const raw = b64ToU8(els[k].textContent.trim()); els[k].textContent = "";
+    const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip"));
+    files[els[k].dataset.name] = new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+} catch (e) { $s.textContent = "내장 파일을 풀지 못했습니다: " + e.message; throw e; }
+
+const realFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const u = typeof input === "string" ? input : (input.url || String(input));
+  const m = u.match(/\/resolve\/[^/]+\/(.+?)(\?.*)?$/);
+  if (m) {
+    const f = files["hf/" + decodeURIComponent(m[1])];
+    if (!f) return new Response("not found", { status: 404 });
+    return new Response(f, { status: 200, headers: { "Content-Type": m[1].endsWith(".json") ? "application/json" : "application/octet-stream", "Content-Length": String(f.length) } });
+  }
+  return realFetch(input, init);
+};
+const blobUrl = (name, type) => URL.createObjectURL(new Blob([files[name]], { type }));
+const T = await import(blobUrl("lib.js", "text/javascript"));
+const { AutoTokenizer, AutoProcessor, CLIPTextModelWithProjection, CLIPVisionModelWithProjection, RawImage, env } = T;
+env.allowLocalModels = false;
+env.useBrowserCache = false;
+env.backends.onnx.wasm.wasmPaths = { mjs: blobUrl("ort.mjs", "text/javascript"), wasm: blobUrl("ort.wasm", "application/wasm") };
+env.backends.onnx.wasm.numThreads = 1;
+env.backends.onnx.wasm.proxy = false;
+
+const MODEL = "Xenova/clip-vit-base-patch32";
+const MAX_PER_BREED = 40;   // 품종당 최대 기준 사진 수
+const REF_WEIGHT = 0.7;     // 기준 사진 결과를 반영하는 비율
+
+// [영문명, 한글명]
+const BREEDS = [
+ ["Abyssinian","아비시니안"],["American Bobtail","아메리칸 밥테일"],["American Curl","아메리칸 컬"],["American Shorthair","아메리칸 숏헤어"],
+ ["American Wirehair","아메리칸 와이어헤어"],["Balinese","발리니즈"],["Bengal","벵갈"],["Birman","버만"],["Bombay","봄베이"],
+ ["British Longhair","브리티시 롱헤어"],["British Shorthair","브리티시 숏헤어"],["Burmese","버미즈"],["Burmilla","버밀라"],
+ ["Chartreux","샤르트뢰"],["Chausie","차우시"],["Cornish Rex","콘월 렉스"],["Cymric","킴릭"],["Devon Rex","데본 렉스"],
+ ["Donskoy","돈스코이"],["Egyptian Mau","이집션 마우"],["European Burmese","유러피안 버미즈"],["Exotic Shorthair","엑조틱 숏헤어"],
+ ["Havana Brown","하바나 브라운"],["Highlander","하이랜더"],["Himalayan","히말라얀"],["Japanese Bobtail","재패니즈 밥테일"],
+ ["Javanese","자바니즈"],["Khao Manee","카오마니"],["Korat","코랫"],["Kurilian Bobtail","쿠릴리안 밥테일"],["LaPerm","라펌"],
+ ["Lykoi","라이코이"],["Maine Coon","메인쿤"],["Manx","맹크스"],["Minskin","민스킨"],["Munchkin","먼치킨"],
+ ["Nebelung","네벨룽"],["Norwegian Forest Cat","노르웨이 숲 고양이"],["Ocicat","오시캣"],["Oriental Shorthair","오리엔탈 숏헤어"],
+ ["Persian","페르시안"],["Peterbald","피터볼드"],["Pixie-bob","픽시밥"],["Ragamuffin","라가머핀"],["Ragdoll","랙돌"],
+ ["Russian Blue","러시안 블루"],["Savannah","사바나"],["Scottish Fold","스코티시 폴드"],["Selkirk Rex","셀커크 렉스"],
+ ["Serengeti","세렝게티"],["Siamese","샴"],["Siberian","시베리안"],["Singapura","싱가푸라"],["Snowshoe","스노우슈"],
+ ["Somali","소말리"],["Sphynx","스핑크스"],["Tonkinese","통키니즈"],["Toyger","토이거"],["Turkish Angora","터키시 앙고라"],
+ ["Turkish Van","터키시 반"],["Ukrainian Levkoy","우크라이니안 레프코이"],["York Chocolate","요크 초콜릿"],
+ ["Korean Shorthair","코리안 숏헤어"],["domestic shorthair","도메스틱 숏헤어(믹스)"],["domestic longhair","도메스틱 롱헤어(믹스)"],
+ ["orange tabby","치즈 태비"],["tuxedo","턱시도"],["calico","칼리코(삼색이)"],["tortoiseshell","트라이컬러(고등어 삼색)"],
+ ["silver tabby","실버 태비"],["mackerel tabby","고등어 태비"]
+];
+// 품종이 아니라 털 무늬를 가리키는 항목: 품종 순위에서는 빼고 따로 보여준다.
+const COATS = new Set(["orange tabby","tuxedo","calico","tortoiseshell","silver tabby","mackerel tabby"]);
+const NOT_CAT = [["dog","개"],["person","사람"],["landscape","풍경"],["object","물체"],["bird","새"]];
+
+// 문장 여러 개의 평균으로 품종 설명을 만든다.
+const TEMPLATES = [
+  "a photo of a {}.", "a close-up photo of a {}.", "a portrait of a {}.",
+  "a high quality photo of a {}.", "a {} sitting indoors.", "a {} outdoors.", "a cute {}."
+];
+
+const $ = id => document.getElementById(id);
+const status = t => { $("status").textContent = t; };
+const prog = $("prog");
+const setProg = v => { if (v == null) prog.style.display = "none"; else { prog.style.display = "block"; prog.value = v; } };
+
+// ---------- 벡터 도구 ----------
+const norm = v => { let s = 0; for (let i = 0; i < v.length; i++) s += v[i]*v[i]; s = Math.sqrt(s) || 1; for (let i = 0; i < v.length; i++) v[i] /= s; return v; };
+const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]*b[i]; return s; };
+const rows = t => { const [n, d] = t.dims; const out = []; for (let i = 0; i < n; i++) out.push(norm(Float32Array.from(t.data.subarray(i*d, (i+1)*d)))); return out; };
+const softmax = a => { const m = Math.max(...a); const e = a.map(x => Math.exp(x - m)); const s = e.reduce((p, c) => p + c, 0); return e.map(x => x / s); };
+const key = s => s.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+
+// ---------- 모델 ----------
+let tokenizer, textModel, processor, visionModel;
+async function loadModels() {
+  const opt = { dtype: "q8", device: "wasm" };
+  status("모델을 불러오는 중입니다 (이미지)…");
+  processor = await AutoProcessor.from_pretrained(MODEL);
+  visionModel = await CLIPVisionModelWithProjection.from_pretrained(MODEL, opt);
+  status("모델을 불러오는 중입니다 (텍스트)…");
+  tokenizer = await AutoTokenizer.from_pretrained(MODEL);
+  textModel = await CLIPTextModelWithProjection.from_pretrained(MODEL, opt);
+}
+async function embedTexts(texts) {
+  const out = [];
+  for (let i = 0; i < texts.length; i += 48) {
+    const inp = tokenizer(texts.slice(i, i + 48), { padding: true, truncation: true });
+    const { text_embeds } = await textModel(inp);
+    out.push(...rows(text_embeds));
+  }
+  return out;
+}
+async function embedBlob(blob) {
+  const img = await RawImage.fromBlob(blob);
+  const inp = await processor(img);
+  const { image_embeds } = await visionModel(inp);
+  return rows(image_embeds)[0];
+}
+
+// ---------- 라벨 ----------
+// label: {key, en, ko, isCat, text(Float32Array), refs: Float32Array[]}
+let labels = [];
+const mkPrompts = (en, isCat) => TEMPLATES.map(t => t.replace("{}", isCat && !/\bcat$/i.test(en) ? en + " cat" : en));
+async function addTextEmbeds(list) {
+  const flat = list.flatMap(l => mkPrompts(l.en, l.isCat));
+  const emb = await embedTexts(flat);
+  let k = 0;
+  for (const l of list) {
+    const acc = new Float32Array(emb[0].length);
+    for (let i = 0; i < TEMPLATES.length; i++, k++) for (let j = 0; j < acc.length; j++) acc[j] += emb[k][j];
+    l.text = norm(acc);
+  }
+}
+async function buildLabels() {
+  labels = [
+    ...BREEDS.map(([en, ko]) => ({ key: en, en, ko, isCat: true, coat: COATS.has(en), refs: [] })),
+    ...NOT_CAT.map(([en, ko]) => ({ key: en, en, ko, isCat: false, refs: [] }))
+  ];
+  status("품종 설명을 계산하는 중입니다…");
+  await addTextEmbeds(labels);
+}
+function findLabel(folder) {
+  const k = key(folder);
+  return labels.find(l => l.isCat && (key(l.en) === k || key(l.ko) === k || key(l.key) === k));
+}
+
+// ---------- 저장소(IndexedDB, 실패해도 동작) ----------
+const idb = {
+  open: () => new Promise((res, rej) => { const r = indexedDB.open("catbreed", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }),
+  async get(k) { const db = await this.open(); return new Promise((res, rej) => { const q = db.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); },
+  async set(k, v) { const db = await this.open(); return new Promise((res, rej) => { const t = db.transaction("kv", "readwrite"); t.objectStore("kv").put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); },
+  async del(k) { const db = await this.open(); return new Promise((res, rej) => { const t = db.transaction("kv", "readwrite"); t.objectStore("kv").delete(k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); }
+};
+async function saveRefs() {
+  try {
+    const data = labels.filter(l => l.refs.length).map(l => ({ key: l.key, en: l.en, ko: l.ko, custom: !BREEDS.some(b => b[0] === l.key), refs: l.refs }));
+    await idb.set("refs", data);
+  } catch (e) { /* 저장 실패는 무시 */ }
+}
+async function loadRefs() {
+  try {
+    const data = await idb.get("refs");
+    if (!data) return;
+    const customs = [];
+    for (const d of data) {
+      let l = labels.find(x => x.key === d.key);
+      if (!l) { l = { key: d.key, en: d.en, ko: d.ko, isCat: true, refs: [] }; labels.push(l); customs.push(l); }
+      l.refs = d.refs;
+    }
+    if (customs.length) await addTextEmbeds(customs);
+  } catch (e) { /* 저장소를 못 읽어도 계속 */ }
+}
+function refSummary() {
+  const withRefs = labels.filter(l => l.refs.length);
+  const n = withRefs.reduce((s, l) => s + l.refs.length, 0);
+  $("refinfo").textContent = n ? `불러온 기준 사진: ${withRefs.length}개 품종, ${n}장` : "불러온 기준 사진: 없음";
+}
+
+// ---------- 분류 ----------
+function classify(emb) {
+  const zs = softmax(labels.map(l => 100 * dot(emb, l.text)));
+  const refIdx = labels.map((l, i) => l.refs.length ? i : -1).filter(i => i >= 0);
+  if (!refIdx.length) return { probs: zs, used: 0 };
+  // 기준 사진 점수: 가장 비슷한 최대 3장의 평균 유사도
+  const sims = refIdx.map(i => {
+    const s = labels[i].refs.map(r => dot(emb, r)).sort((a, b) => b - a).slice(0, 3);
+    return s.reduce((p, c) => p + c, 0) / s.length;
+  });
+  const rp = softmax(sims.map(s => 100 * s));
+  const mass = refIdx.reduce((s, i) => s + zs[i], 0);   // 기준 사진 품종들이 가진 확률 총합
+  const out = zs.slice();
+  refIdx.forEach((i, j) => { out[i] = (1 - REF_WEIGHT) * zs[i] + REF_WEIGHT * mass * rp[j]; });
+  return { probs: out, used: refIdx.length };
+}
+
+async function run(file) {
+  if (!file || !visionModel) return;
+  const url = URL.createObjectURL(file);
+  const img = $("preview"); img.src = url; img.style.display = "block"; $("hint").style.display = "none";
+  status("분석 중…"); $("result").style.display = "none";
+  try {
+    const emb = await embedBlob(file);
+    const { probs, used } = classify(emb);
+    // 고양이 여부는 1위 항목이 아니라 "고양이 항목 전체의 확률 합"으로 판단한다.
+    const catMass = probs.reduce((s, p, i) => s + (labels[i].isCat ? p : 0), 0);
+    if (catMass < 0.5) {
+      const bi = probs.reduce((m, p, i) => (!labels[i].isCat && p > probs[m] ? i : m), labels.findIndex(l => !l.isCat));
+      $("top").innerHTML = "고양이가 아닌 것 같아요<small>가장 가까운 항목: " + labels[bi].ko + "</small>";
+      $("list").innerHTML = "";
+    } else {
+      // 품종끼리만 다시 100%로 맞춰 순위를 매긴다 (털 무늬 항목은 제외).
+      const idx = labels.map((l, i) => (l.isCat && !l.coat ? i : -1)).filter(i => i >= 0);
+      const tot = idx.reduce((s, i) => s + probs[i], 0) || 1;
+      const order = idx.map(i => [probs[i] / tot, i]).sort((a, b) => b[0] - a[0]).slice(0, 5);
+      const best = labels[order[0][1]];
+      const cidx = labels.map((l, i) => (l.coat ? i : -1)).filter(i => i >= 0);
+      const ctot = cidx.reduce((s, i) => s + probs[i], 0) || 1;
+      const coat = cidx.map(i => [probs[i] / ctot, i]).sort((a, b) => b[0] - a[0])[0];
+      $("top").innerHTML = best.ko + "<small>" + best.en + " · 확률 " + (order[0][0]*100).toFixed(1) + "%" + (used ? " · 기준 사진 " + used + "개 품종 반영" : "") +
+        (coat[0] >= 0.5 ? " · 털 무늬 추정: " + labels[coat[1]].ko : "") + "</small>";
+      $("list").innerHTML = order.map(([p]) =>
+        '<li><span class="n"></span><span class="p">' + (p*100).toFixed(1) + '%</span><span class="b"><i style="width:' + (p*100).toFixed(1) + '%"></i></span></li>').join("");
+      [...$("list").children].forEach((li, k) => { li.querySelector(".n").textContent = labels[order[k][1]].ko; });
+    }
+    $("result").style.display = "block";
+    status("");
+  } catch (e) { status("분석에 실패했습니다: " + e.message); }
+}
+
+// ---------- 기준 사진 불러오기 ----------
+async function importRefs(files) {
+  const imgs = [...files].filter(f => f.type.startsWith("image/"));
+  const groups = new Map();
+  for (const f of imgs) {
+    const parts = (f.webkitRelativePath || "").split("/");
+    if (parts.length < 2) continue;
+    const folder = parts[parts.length - 2];
+    if (!groups.has(folder)) groups.set(folder, []);
+    groups.get(folder).push(f);
+  }
+  if (!groups.size) { status("이미지가 들어 있는 품종 폴더를 찾지 못했습니다."); return; }
+  const total = [...groups.values()].reduce((s, g) => s + Math.min(g.length, MAX_PER_BREED), 0);
+  let done = 0, failed = 0;
+  const newOnes = [];
+  for (const [folder, list] of groups) {
+    let l = findLabel(folder);
+    if (!l) { l = { key: folder, en: folder, ko: folder, isCat: true, refs: [] }; labels.push(l); newOnes.push(l); }
+    l.refs = [];
+    for (const f of list.slice(0, MAX_PER_BREED)) {
+      try { l.refs.push(await embedBlob(f)); } catch (e) { failed++; }
+      done++;
+      status(`기준 사진 분석 중… ${done}/${total} (${folder})`);
+      setProg(done / total * 100);
+      if (done % 5 === 0) await new Promise(r => setTimeout(r));
+    }
+  }
+  if (newOnes.length) await addTextEmbeds(newOnes);
+  await saveRefs();
+  setProg(null); refSummary();
+  status(`기준 사진 ${done - failed}장을 반영했습니다.` + (failed ? ` (${failed}장은 읽지 못했습니다)` : ""));
+}
+
+// ---------- 시작 ----------
+const dis = v => { $("file").disabled = v; $("refdir").disabled = v; $("refclear").disabled = v; };
+dis(true);
+try {
+  await loadModels();
+  await buildLabels();
+  await loadRefs();
+  refSummary();
+  status("준비 완료. 고양이 사진을 올려 보세요.");
+  dis(false);
+} catch (e) {
+  setProg(null);
+  status("모델을 불러오지 못했습니다. 크롬 또는 엣지 최신 버전으로 다시 열어 보세요. (" + e.message + ")");
+}
+
+$("file").addEventListener("change", e => run(e.target.files[0]));
+$("refdir").addEventListener("change", async e => { dis(true); try { await importRefs(e.target.files); } finally { dis(false); e.target.value = ""; } });
+$("refclear").addEventListener("click", async () => {
+  labels = labels.filter(l => BREEDS.some(b => b[0] === l.key) || NOT_CAT.some(b => b[0] === l.key));
+  labels.forEach(l => { l.refs = []; });
+  try { await idb.del("refs"); } catch (e) {}
+  refSummary(); status("기준 사진을 지웠습니다.");
+});
+const drop = $("drop");
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+$("refbtn").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("refdir").click(); } });
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => run(e.dataTransfer.files[0]));
+</script>
+</body>
+</html>
