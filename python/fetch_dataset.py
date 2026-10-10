@@ -4,7 +4,8 @@
     python fetch_dataset.py --per-breed 30 --only Persian Siamese
 
 - 무료 라이선스(CC, 퍼블릭 도메인) 사진만 받고, 출처·라이선스를 dataset/attribution.csv에 기록한다.
-- 검색 결과에는 고양이가 아닌 사진이 섞일 수 있다. 학습 전에 폴더를 훑어보고 지우는 것을 권장한다.
+- 품종 분류(Category)에 들어 있는 사진만 받는다. 분류가 없는 품종은 건너뛴다.
+- 그래도 다른 고양이 사진이 섞일 수 있으니 학습 전에 폴더를 훑어보고 지우는 것을 권장한다.
 - 표준 라이브러리만 사용한다. Wikimedia 정책에 맞춰 천천히 받는다.
 """
 import argparse, csv, json, os, re, sys, time, urllib.parse, urllib.request
@@ -35,14 +36,27 @@ def get(url, tries=6):
     raise RuntimeError("요청 실패: " + url)
 
 
-def search(query, want):
-    """검색 결과 파일 목록 (제목, 썸네일 URL, 라이선스, 작가, 페이지 URL)."""
-    out, cont = [], {}
-    while len(out) < want * 3:       # 걸러질 것을 감안해 넉넉히 찾는다
-        params = {"action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
-                  "gsrsearch": query + " filetype:bitmap", "gsrlimit": 50, "prop": "imageinfo",
-                  "iiprop": "url|mime|extmetadata", "iiurlwidth": 640, **cont}
-        d = json.loads(get(API + "?" + urllib.parse.urlencode(params)))
+def api(**params):
+    return json.loads(get(API + "?" + urllib.parse.urlencode({"action": "query", "format": "json", **params})))
+
+
+def members(cat, limit=300):
+    """분류 하나에 들어 있는 파일 제목과 하위 분류 제목."""
+    files, subs, cont = [], [], {}
+    while len(files) < limit:
+        d = api(list="categorymembers", cmtitle=cat, cmtype="file|subcat", cmlimit=200, **cont)
+        for m in d.get("query", {}).get("categorymembers", []):
+            (subs if m["title"].startswith("Category:") else files).append(m["title"])
+        if "continue" not in d:
+            break
+        cont = d["continue"]; time.sleep(1)
+    return files, subs
+
+
+def info(titles):
+    out = []
+    for i in range(0, len(titles), 40):
+        d = api(titles="|".join(titles[i:i + 40]), prop="imageinfo", iiprop="url|mime|extmetadata", iiurlwidth=640)
         for p in d.get("query", {}).get("pages", {}).values():
             ii = (p.get("imageinfo") or [{}])[0]
             meta = ii.get("extmetadata", {})
@@ -53,11 +67,23 @@ def search(query, want):
                 continue
             artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "")).strip()
             out.append((p["title"], ii["thumburl"], lic, artist, ii.get("descriptionurl", "")))
-        if "continue" not in d:
-            break
-        cont = d["continue"]
         time.sleep(1)
     return out
+
+
+def search(en, want):
+    """품종 분류(Category)에서만 사진을 찾는다. 글자 검색은 엉뚱한 사진이 섞여서 쓰지 않는다."""
+    for cat in (f"Category:{en} cats", f"Category:{en} (cat)", f"Category:{en}"):
+        files, subs = members(cat)
+        if files or subs:
+            break
+    else:
+        return []
+    for sub in subs[:6]:           # 하위 분류(새끼 고양이 등) 한 단계만
+        if len(files) >= want * 2:
+            break
+        files += members(sub, 100)[0]
+    return info(files[: want * 2])
 
 
 def main():
@@ -83,11 +109,12 @@ def main():
         have = len([f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".png"))])
         if have >= a.per_breed:
             print(f"{en}: 이미 {have}장"); continue
-        q = en if en.lower().endswith("cat") else en + " cat"
         try:
-            hits = search(q, a.per_breed - have)
+            hits = search(en, a.per_breed - have)
         except Exception as e:
             print(f"{en}: 검색 실패 ({e})"); continue
+        if not hits:
+            print(f"{en}: Wikimedia에 품종 분류가 없어 건너뜀"); continue
         n = have
         for title, url, lic, artist, page in hits:
             if n >= a.per_breed:
