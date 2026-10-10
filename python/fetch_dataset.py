@@ -15,7 +15,7 @@ from breeds import BREEDS
 API = "https://commons.wikimedia.org/w/api.php"
 UA = "cat-breed-v2-dataset/1.0 (https://github.com/ocqhdlffj-lgtm/cat-breed-v2)"
 FREE = re.compile(r"^(CC[ -]BY|CC0|Public domain|PD|GFDL)", re.I)
-SKIP_TITLE = re.compile(r"(logo|map|flag|diagram|drawing|painting|stamp|icon|poster|\.svg|\.pdf|\.tif)", re.I)
+SKIP_TITLE = re.compile(r"(logo|map|flag|diagram|drawing|painting|stamp|icon|poster|chart|graph|statistic|registration|data|\.svg|\.pdf|\.tif)", re.I)
 # 털 무늬·혼합 항목은 품종이 아니므로 제외
 SKIP_BREEDS = {"domestic shorthair", "domestic longhair", "orange tabby", "tuxedo", "calico",
                "tortoiseshell", "silver tabby", "mackerel tabby"}
